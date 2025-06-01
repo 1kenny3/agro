@@ -109,6 +109,8 @@ class CropClassificationResponse(BaseModel):
     analysis_notes: Optional[List[str]] = None  # Новое поле
     processing_info: Dict[str, Any]  # Изменено на более гибкий тип
     corn_analysis: Optional[Dict[str, Any]] = None  # Диагностика кукурузы
+    morphology_analysis: Optional[Dict[str, Any]] = None  # Морфологический анализ
+    model_results: Optional[Dict[str, Any]] = None  # Результаты отдельных моделей
 
 class QualityAssessmentResponse(BaseModel):
     """Ответ на запрос оценки качества с улучшенным анализом болезней"""

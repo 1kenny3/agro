@@ -155,14 +155,15 @@ class ImprovedCropClassifier:
         ])
     
     def _analyze_corn_features(self, image: Image.Image) -> Dict:
-        """Анализ специфических признаков кукурузы"""
+        """Улучшенный анализ специфических признаков кукурузы"""
         # Преобразуем в массив
         img_array = np.array(image.convert('RGB'))
+        height, width = img_array.shape[:2]
         
         # Анализ цветовых каналов
         hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
         
-        # Анализ зеленого канала (листья)
+        # Анализ зеленого канала (листья кукурузы имеют специфический зеленый)
         green_channel = img_array[:, :, 1]
         green_ratio = np.mean(green_channel) / 255.0
         
@@ -178,30 +179,97 @@ class ImprovedCropClassifier:
         vertical_lines = np.sum(np.abs(angles) < np.pi/6) / angles.size  # Вертикальные линии
         
         # Поиск метелок (верхняя часть изображения, желто-коричневые области)
-        upper_region = hsv[:img_array.shape[0]//3, :, :]
+        upper_region = hsv[:height//3, :, :]
         
-        # Цветовой диапазон для метелок кукурузы (желто-коричневый)
-        tassel_mask = cv2.inRange(upper_region, 
-                                 np.array([10, 50, 50]), 
-                                 np.array([30, 255, 255]))
+        # Расширенный цветовой диапазон для метелок кукурузы
+        tassel_mask1 = cv2.inRange(upper_region, 
+                                  np.array([10, 50, 50]), 
+                                  np.array([30, 255, 255]))
+        # Дополнительный диапазон для зрелых метелок
+        tassel_mask2 = cv2.inRange(upper_region,
+                                  np.array([8, 30, 80]),
+                                  np.array([35, 200, 255]))
+        
+        tassel_mask = cv2.bitwise_or(tassel_mask1, tassel_mask2)
         tassel_ratio = np.sum(tassel_mask > 0) / tassel_mask.size
         
-        # Анализ текстуры листьев (широкие полосы)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 15))
-        opened = cv2.morphologyEx(gray, cv2.MORPH_OPEN, kernel)
-        broad_structure = np.sum(opened > 0) / opened.size
+        # Анализ широких листьев кукурузы
+        kernel_horizontal = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 3))
+        horizontal_structure = cv2.morphologyEx(gray, cv2.MORPH_OPEN, kernel_horizontal)
+        
+        kernel_vertical = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 15))
+        vertical_structure = cv2.morphologyEx(gray, cv2.MORPH_OPEN, kernel_vertical)
+        
+        broad_structure = np.sum(horizontal_structure > 0) / horizontal_structure.size
+        vertical_struct_ratio = np.sum(vertical_structure > 0) / vertical_structure.size
+        
+        # Анализ соотношения сторон изображения (кукуруза обычно высокая)
+        aspect_ratio = height / width if width > 0 else 1.0
+        
+        # Анализ цветового распределения (кукуруза имеет характерные зеленые тона)
+        # Фильтруем зеленые области
+        green_mask = cv2.inRange(hsv, 
+                                np.array([40, 40, 40]), 
+                                np.array([80, 255, 255]))
+        green_coverage = np.sum(green_mask > 0) / green_mask.size
+        
+        # Поиск характерных полос на листьях кукурузы
+        # Используем морфологические операции для выделения полосатой структуры
+        kernel_stripe = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 7))
+        stripes = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, kernel_stripe)
+        stripe_pattern = np.mean(stripes) / 255.0
+        
+        # Анализ краев (кукуруза имеет более четкие края листьев)
+        edges = cv2.Canny(gray, 50, 150)
+        edge_density = np.sum(edges > 0) / edges.size
+        
+        # Улучшенная логика определения кукурузы
+        corn_score = 0.0
+        
+        # Метелки - очень важный признак кукурузы
+        if tassel_ratio > 0.02:  # Снижаем порог для более чувствительного обнаружения
+            corn_score += 0.3
+        
+        # Вертикальные структуры
+        if vertical_lines > 0.25:
+            corn_score += 0.2
+        if vertical_struct_ratio > 0.15:
+            corn_score += 0.15
+        
+        # Широкие листья
+        if broad_structure > 0.15:
+            corn_score += 0.15
+        
+        # Зеленый покров
+        if green_coverage > 0.3:
+            corn_score += 0.1
+        
+        # Полосатая структура листьев
+        if stripe_pattern > 0.05:
+            corn_score += 0.1
+        
+        # Плотность краев
+        if edge_density > 0.1:
+            corn_score += 0.05
+        
+        # Соотношение сторон (кукуруза обычно выше)
+        if aspect_ratio > 1.2:
+            corn_score += 0.05
+        
+        is_corn_likely = corn_score >= 0.4  # Снижаем порог для более чувствительного обнаружения
         
         return {
             "green_ratio": green_ratio,
+            "green_coverage": green_coverage,
             "vertical_lines": vertical_lines,
+            "vertical_struct_ratio": vertical_struct_ratio,
             "tassel_ratio": tassel_ratio,
             "broad_structure": broad_structure,
-            "is_corn_likely": (
-                tassel_ratio > 0.05 and  # Есть метелки
-                vertical_lines > 0.3 and  # Много вертикальных линий
-                green_ratio > 0.4 and     # Достаточно зелени
-                broad_structure > 0.2     # Широкие листья
-            )
+            "stripe_pattern": stripe_pattern,
+            "edge_density": edge_density,
+            "aspect_ratio": aspect_ratio,
+            "corn_score": corn_score,
+            "is_corn_likely": is_corn_likely
         }
     
     def predict(self, image: Image.Image) -> Dict:
@@ -266,31 +334,84 @@ class ImprovedCropClassifier:
             # Переопределяем результат
             predicted_class = "corn"
             predicted_class_ru = "кукуруза"
-            confidence = 0.85  # Высокая уверенность на основе морфологического анализа
+            confidence = min(0.75 + corn_analysis["corn_score"] * 0.2, 0.95)  # Динамическая уверенность
             
-            # Обновляем вероятности
-            all_probabilities = {"corn": 0.85, "wheat": 0.10, "barley": 0.05}
-            all_probabilities_ru = {"кукуруза": 0.85, "пшеница": 0.10, "ячмень": 0.05}
+            # Обновляем вероятности на основе corn_score
+            corn_prob = confidence
+            remaining_prob = 1.0 - corn_prob
+            all_probabilities = {
+                "corn": corn_prob, 
+                "wheat": remaining_prob * 0.6, 
+                "barley": remaining_prob * 0.4
+            }
+            all_probabilities_ru = {
+                "кукуруза": corn_prob, 
+                "пшеница": remaining_prob * 0.6, 
+                "ячмень": remaining_prob * 0.4
+            }
             
             analysis_notes = [
-                "🌽 ИСПРАВЛЕНО: Обнаружены признаки кукурузы",
+                "🌽 ИСПРАВЛЕНО: Обнаружены характерные признаки кукурузы",
+                f"🎯 Общий счет кукурузы: {corn_analysis['corn_score']:.3f}",
                 f"✅ Метелки в верхней части: {corn_analysis['tassel_ratio']:.3f}",
                 f"✅ Вертикальные структуры: {corn_analysis['vertical_lines']:.3f}",
                 f"✅ Широкие листья: {corn_analysis['broad_structure']:.3f}",
-                "Морфологический анализ превосходит базовую классификацию"
+                f"✅ Зеленый покров: {corn_analysis['green_coverage']:.3f}",
+                f"✅ Полосатая структура: {corn_analysis['stripe_pattern']:.3f}",
+                "🧠 Морфологический анализ превосходит базовую классификацию"
+            ]
+            
+        # Если модель слабо предсказывает кукурузу, но анализ сильно подтверждает
+        elif base_predicted_class == "corn" and confidence < 0.7 and corn_analysis["corn_score"] > 0.6:
+            predicted_class = "corn"
+            predicted_class_ru = "кукуруза"
+            confidence = min(0.8 + corn_analysis["corn_score"] * 0.15, 0.95)  # Повышаем уверенность
+            
+            # Перераспределяем вероятности
+            corn_prob = confidence
+            remaining_prob = 1.0 - corn_prob
+            all_probabilities["corn"] = corn_prob
+            all_probabilities["wheat"] = remaining_prob * 0.6
+            all_probabilities["barley"] = remaining_prob * 0.4
+            all_probabilities_ru["кукуруза"] = corn_prob
+            all_probabilities_ru["пшеница"] = remaining_prob * 0.6
+            all_probabilities_ru["ячмень"] = remaining_prob * 0.4
+            
+            analysis_notes = [
+                "🌽 ПОДТВЕРЖДЕНО: Кукуруза идентифицирована с повышенной уверенностью",
+                f"📈 Уверенность повышена с {avg_probabilities[predicted_class_idx]:.3f} до {confidence:.3f}",
+                f"🎯 Счет морфологии: {corn_analysis['corn_score']:.3f}",
+                f"✅ Метелки: {corn_analysis['tassel_ratio']:.3f}",
+                f"✅ Структуры: {corn_analysis['vertical_lines']:.3f}",
+                "🧠 Морфологический анализ подтверждает классификацию"
             ]
             
         # Если модель уверенно предсказывает кукурузу И анализ подтверждает
         elif base_predicted_class == "corn" and corn_analysis["is_corn_likely"]:
             predicted_class = "corn"
             predicted_class_ru = "кукуруза" 
-            confidence = min(confidence + 0.15, 0.95)  # Повышаем уверенность
+            confidence = min(confidence + 0.1, 0.95)  # Небольшое повышение уверенности
             
             analysis_notes = [
                 "🌽 ПОДТВЕРЖДЕНО: Кукуруза идентифицирована правильно",
                 f"✅ Метелки: {corn_analysis['tassel_ratio']:.3f}",
                 f"✅ Структура: {corn_analysis['vertical_lines']:.3f}",
-                "Модель и морфологический анализ согласованы"
+                f"✅ Морфологический счет: {corn_analysis['corn_score']:.3f}",
+                "🤝 Модель и морфологический анализ согласованы"
+            ]
+        
+        # Если модель предсказывает кукурузу, но анализ не подтверждает - предупреждение
+        elif base_predicted_class == "corn" and not corn_analysis["is_corn_likely"]:
+            predicted_class = base_predicted_class
+            predicted_class_ru = self.classes_ru[predicted_class]
+            confidence = max(confidence - 0.1, 0.3)  # Снижаем уверенность
+            
+            analysis_notes = [
+                "⚠️ ПРЕДУПРЕЖДЕНИЕ: Модель предсказывает кукурузу, но морфологический анализ не подтверждает",
+                f"❌ Счет морфологии: {corn_analysis['corn_score']:.3f} (низкий)",
+                f"❌ Метелки: {corn_analysis['tassel_ratio']:.3f}",
+                f"❌ Структуры: {corn_analysis['vertical_lines']:.3f}",
+                "🔍 Рекомендуется дополнительная проверка"
             ]
             
         else:

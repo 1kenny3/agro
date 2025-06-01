@@ -399,13 +399,15 @@ async def comprehensive_analysis(
         processed_image = processed["processed_image"]
         
         # Выполняем все анализы - используем ту же логику выбора модели, что и в /classify
-        if models.get("enhanced_crop_classifier"):
-            logger.info("🎯 Используем улучшенную модель для комплексного анализа")
+        if models.get("smart_crop_classifier"):
+            logger.info("🚀 Используем УМНЫЙ классификатор для расширенного комплексного анализа")
+            crop_result = models["smart_crop_classifier"].predict(processed_image)
+        elif models.get("enhanced_crop_classifier"):
+            logger.info("🎯 Используем улучшенную модель для расширенного комплексного анализа")
             crop_result = models["enhanced_crop_classifier"].predict(processed_image)
         else:
-            logger.info("⚙️ Используем стандартную модель для комплексного анализа")
+            logger.info("⚙️ Используем стандартную модель для расширенного комплексного анализа")
             crop_result = models["crop_classifier"].predict(processed_image)
-            
         quality_result = models["quality_assessor"].predict(processed_image)
         yield_result = models["yield_predictor"].predict_yield(processed_image)
         
@@ -666,17 +668,35 @@ async def comprehensive_enhanced_analysis(
         # Валидация изображения
         image = await validate_and_process_image(file)
         
-        if use_enhancement:
-            # Используем продвинутую обработку
-            enhanced_result = models["advanced_processor"].adaptive_preprocess(image)
-            processed_image = enhanced_result["enhanced_image"]
-            processing_info = {
-                "original_size": enhanced_result["original_image"].size,
-                "final_size": enhanced_result["enhanced_image"].size,
-                "enhancement_applied": enhanced_result["enhancement_applied"],
-                "quality_metrics": enhanced_result["quality_info"],
-                "warnings": []
-            }
+        if use_enhancement and models.get("advanced_processor"):
+            # Используем продвинутую обработку если доступна
+            try:
+                enhanced_result = models["advanced_processor"].adaptive_preprocess(image)
+                processed_image = enhanced_result["enhanced_image"]
+                processing_info = {
+                    "original_size": enhanced_result["original_image"].size,
+                    "final_size": enhanced_result["enhanced_image"].size,
+                    "enhancement_applied": enhanced_result["enhancement_applied"],
+                    "quality_metrics": enhanced_result["quality_info"],
+                    "warnings": []
+                }
+            except Exception as e:
+                logger.warning(f"Ошибка продвинутой обработки: {e}. Используем стандартную.")
+                # Резерв: используем стандартную обработку
+                processed = models["image_processor"].preprocess_image(image)
+                if not processed["is_valid"]:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Ошибка обработки изображения: {processed['errors']}"
+                    )
+                processed_image = processed["processed_image"]
+                processing_info = {
+                    "original_size": processed["original_size"],
+                    "final_size": processed["final_size"],
+                    "enhancement_applied": False,
+                    "quality_metrics": None,
+                    "warnings": processed["warnings"] + ["Продвинутая обработка недоступна"]
+                }
         else:
             # Используем стандартную обработку
             processed = models["image_processor"].preprocess_image(image)
